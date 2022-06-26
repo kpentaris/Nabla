@@ -32,9 +32,9 @@ else()
 	endif()
 endif()
 
-if(NBL_BUILD_ANDROID)
+#if(NBL_BUILD_ANDROID)
 	enable_language(ASM)
-endif()
+#endif()
 
 find_package(Vulkan)
 if (Vulkan_FOUND)

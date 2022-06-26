@@ -1,141 +1,140 @@
 #include "nbl/ext/RadixSort/RadixSort.h"
 
-namespace nbl
-{
-namespace ext
-{
-namespace RadixSort
-{
+namespace nbl {
+    namespace ext {
+        namespace RadixSort {
 
-RadixSort::RadixSort(video::IDriver* driver, const uint32_t wg_size) : m_wg_size(wg_size)
-{
-	assert(nbl::core::isPoT(m_wg_size));
+            RadixSort::RadixSort(video::ILogicalDevice *device,
+                                 const uint32_t wg_size, const uint32_t element_count,
+                                 core::smart_refctd_ptr<video::IGPUDescriptorSetLayout> &scanDSLayout,
+                                 core::smart_refctd_ptr<video::IGPUComputePipeline> &scan_pipeline)
+                : m_wg_size(wg_size), m_element_count(element_count), m_scan_ds_layout(scanDSLayout), m_scan_pipeline(scan_pipeline) {
 
-	const asset::SPushConstantRange pc_range = { asset::ISpecializedShader::ESS_COMPUTE, 0u, core::max(sizeof(Parameters_t), sizeof(ScanClass::Parameters_t)) };
+              assert(nbl::core::isPoT(m_wg_size));
 
-	{
-		video::IGPUDescriptorSetLayout::SBinding binding = { 0u, asset::EDT_STORAGE_BUFFER, 1u, video::IGPUSpecializedShader::ESS_COMPUTE, nullptr };
-		m_scan_ds_layout = driver->createDescriptorSetLayout(&binding, &binding + 1);
-	}
+              const asset::SPushConstantRange pc_range = {
+                  asset::IShader::ESS_COMPUTE, 0u,
+                  static_cast<uint32_t>(core::max(sizeof(Parameters_t), sizeof(video::CScanner::Parameters)))
+              };
 
-	{
-		const uint32_t count = 2u;
-		video::IGPUDescriptorSetLayout::SBinding binding[count];
-		for (uint32_t i = 0; i < count; ++i)
-			binding[i] = { i, asset::EDT_STORAGE_BUFFER, 1u, video::IGPUSpecializedShader::ESS_COMPUTE, nullptr };
-		m_sort_ds_layout = driver->createDescriptorSetLayout(binding, binding + count);
-	}
+              {
+                const uint32_t count = 2u;
+                video::IGPUDescriptorSetLayout::SBinding binding[count];
+                for (uint32_t i = 0; i < count; ++i)
+                  binding[i] = {i, asset::EDT_STORAGE_BUFFER, 1u, asset::IShader::ESS_COMPUTE, nullptr};
+                m_sort_ds_layout = device->createDescriptorSetLayout(binding, binding + count);
+              }
 
-	m_pipeline_layout = driver->createPipelineLayout(&pc_range, &pc_range + 1, core::smart_refctd_ptr(m_scan_ds_layout),
-		core::smart_refctd_ptr(m_sort_ds_layout));
+              m_pipeline_layout = device->createPipelineLayout(&pc_range, &pc_range + 1,
+                                                               core::smart_refctd_ptr(m_scan_ds_layout), core::smart_refctd_ptr(m_sort_ds_layout));
 
-	m_histogram_pipeline = driver->createComputePipeline(nullptr, core::smart_refctd_ptr(m_pipeline_layout),
-		createShader("nbl/builtin/glsl/ext/RadixSort/default_histogram.comp", driver));
+              m_histogram_pipeline = device->createComputePipeline(nullptr, core::smart_refctd_ptr(m_pipeline_layout),
+                                                                   core::smart_refctd_ptr<video::IGPUSpecializedShader>(getDefaultSpecializedShader(
+                                                                       "nbl/builtin/glsl/ext/RadixSort/default_histogram.comp", device,
+                                                                       E_SHADER_TYPE::ESHT_HISTOGRAM)));
 
-	m_upsweep_pipeline = driver->createComputePipeline(nullptr, core::smart_refctd_ptr(m_pipeline_layout),
-		createShader_Scan("nbl/builtin/glsl/ext/Scan/default_upsweep.comp", driver));
+              m_scatter_pipeline = device->createComputePipeline(nullptr, core::smart_refctd_ptr(m_pipeline_layout),
+                                                                 core::smart_refctd_ptr<video::IGPUSpecializedShader>(getDefaultSpecializedShader(
+                                                                     "nbl/builtin/glsl/ext/RadixSort/default_scatter.comp", device,
+                                                                     E_SHADER_TYPE::ESHT_SCATTER)));
+            }
 
-	m_downsweep_pipeline = driver->createComputePipeline(nullptr, core::smart_refctd_ptr(m_pipeline_layout),
-		createShader_Scan("nbl/builtin/glsl/ext/Scan/default_downsweep.comp", driver));
+            void RadixSort::sort(video::ILogicalDevice *device, video::IGPUCommandBuffer *cmdbuf, video::CScanner *scanner,
+                                 video::IGPUComputePipeline *histogram,
+                                 video::IGPUComputePipeline *scan,
+                                 video::IGPUComputePipeline *scatter,
+                                 core::smart_refctd_ptr<video::IGPUDescriptorSet> *ds_sort,
+                                 core::smart_refctd_ptr<video::IGPUDescriptorSet> *ds_scan,
+                                 Parameters_t *sort_push_constants,
+                                 DispatchInfo_t *sort_dispatch_info,
+                                 video::CScanner::DefaultPushConstants *scan_push_constants,
+                                 video::CScanner::DispatchInfo *scan_dispatch_info,
+                                 asset::SBufferRange<video::IGPUBuffer> &scratch_sort_range, // TODO (Penta): Remove if we don't need for barriers
+                                 asset::SBufferRange<video::IGPUBuffer> &scratch_scan_range, // TODO (Penta): Remove if we don't need for barriers
+                                 asset::E_PIPELINE_STAGE_FLAGS start_mask, asset::E_PIPELINE_STAGE_FLAGS end_mask) {
+              // (Penta): This function must record all passes to the command buffer and the buffer itself must be submitted only once.
+              // Due to the multi-pass nature of the algorithm, it is expected to take the results of the each pass into the next one
+              // but this is avoided by interchanging the input and scratch buffers for each pass (there are 2 descriptor sets, one
+              // where the input buffer is used for input and one where the scratch buffer is used for input). This way we don't need
+              // to copy the scratch buffer results to the input for the next pass, which would require a fence and multiple submissions,
+              // one for each pass.
 
-	m_scatter_pipeline = driver->createComputePipeline(nullptr, core::smart_refctd_ptr(m_pipeline_layout),
-		createShader("nbl/builtin/glsl/ext/RadixSort/default_scatter.comp", driver));
-}
+              for (uint32_t pass = 0; pass < PASS_COUNT; ++pass) {
+                cmdbuf->fillBuffer(scratch_scan_range.buffer.get(), 0u, sizeof(uint32_t) + scratch_scan_range.size / 2u, 0u);
 
-void RadixSort::sort(video::IGPUComputePipeline* histogram, video::IGPUComputePipeline* upsweep, video::IGPUComputePipeline* downsweep,
-	video::IGPUComputePipeline* scatter, video::IGPUDescriptorSet* ds_scan, core::smart_refctd_ptr<video::IGPUDescriptorSet>* ds_sort,
-	ScanClass::Parameters_t* scan_push_constants, Parameters_t* sort_push_constants,
-	ScanClass::DispatchInfo_t* scan_dispatch_info, DispatchInfo_t* sort_dispatch_info,
-	const uint32_t total_scan_pass_count, const uint32_t upsweep_pass_count,
-	video::IVideoDriver* driver)
-{
-	for (uint32_t pass = 0; pass < PASS_COUNT; ++pass)
-	{
-		const video::IGPUPipelineLayout* pipeline_layout = histogram->getLayout();
-		const video::IGPUDescriptorSet* descriptor_sets[2] = { ds_scan, ds_sort[pass % 2].get() };
-		driver->bindDescriptorSets(video::EPBP_COMPUTE, pipeline_layout, 0u, 2u, descriptor_sets, nullptr);
+                const video::IGPUDescriptorSet *descriptor_sets[2] = {ds_scan->get(), ds_sort[pass % 2].get()};
 
-		driver->bindComputePipeline(histogram);
-		dispatchHelper(pipeline_layout, sort_push_constants[pass], sort_dispatch_info[0], driver);
+                // TODO (Penta): Probably needs barriers for each pass as well
 
-		for (uint32_t scan_pass = 0; scan_pass < upsweep_pass_count; ++scan_pass)
-		{
-			driver->bindComputePipeline(upsweep);
-			ScanClass::dispatchHelper(pipeline_layout, scan_push_constants[scan_pass], scan_dispatch_info[scan_pass], driver);
-		}
+                cmdbuf->bindComputePipeline(histogram);
+                cmdbuf->bindDescriptorSets(asset::EPBP_COMPUTE, histogram->getLayout(), 0u, 2u, descriptor_sets);
 
-		for (uint32_t scan_pass = upsweep_pass_count; scan_pass < total_scan_pass_count; ++scan_pass)
-		{
-			driver->bindComputePipeline(downsweep);
-			ScanClass::dispatchHelper(pipeline_layout, scan_push_constants[total_scan_pass_count - 1 - scan_pass], scan_dispatch_info[total_scan_pass_count - 1 - scan_pass], driver);
-		}
+                video::IGPUCommandBuffer::SBufferMemoryBarrier buffBarrier;
+                {
+                  buffBarrier.barrier.srcAccessMask = asset::EAF_TRANSFER_WRITE_BIT;
+                  buffBarrier.barrier.dstAccessMask = asset::EAF_SHADER_READ_BIT;
+                  buffBarrier.dstQueueFamilyIndex = buffBarrier.srcQueueFamilyIndex = cmdbuf->getQueueFamilyIndex();
+                  buffBarrier.buffer = scratch_sort_range.buffer;
+                  buffBarrier.offset = scratch_sort_range.offset;
+                  buffBarrier.size = scratch_sort_range.size;
+                }
 
-		driver->bindComputePipeline(scatter);
-		dispatchHelper(pipeline_layout, sort_push_constants[pass], sort_dispatch_info[0], driver);
-	}
-}
+                auto histogramSrcMask = pass == 0
+                                        ? start_mask
+                                        : static_cast<asset::E_PIPELINE_STAGE_FLAGS>(asset::EPSF_COMPUTE_SHADER_BIT | asset::EPSF_TRANSFER_BIT);
+                dispatchHelper(cmdbuf, histogram->getLayout(), sort_push_constants[pass], *sort_dispatch_info,
+                               histogramSrcMask, 0u, nullptr,
+                               static_cast<asset::E_PIPELINE_STAGE_FLAGS>(asset::EPSF_COMPUTE_SHADER_BIT | asset::EPSF_TRANSFER_BIT), 0u, nullptr
+                );
 
-core::smart_refctd_ptr<video::IGPUSpecializedShader> RadixSort::createShader(const char* shader_file_path, video::IDriver* driver)
-{
-	const char* source_fmt =
-R"===(#version 450
+                cmdbuf->bindComputePipeline(scan);
+                cmdbuf->bindDescriptorSets(asset::EPBP_COMPUTE, scan->getLayout(), 0u, 1u, &ds_scan->get());
+                video::IGPUCommandBuffer::SBufferMemoryBarrier scanDstBufBarrier;
+                {
+                  scanDstBufBarrier.barrier.srcAccessMask = asset::EAF_TRANSFER_WRITE_BIT;
+                  scanDstBufBarrier.barrier.dstAccessMask = asset::EAF_SHADER_READ_BIT;
+                  scanDstBufBarrier.dstQueueFamilyIndex = scanDstBufBarrier.srcQueueFamilyIndex = cmdbuf->getQueueFamilyIndex();
+                  scanDstBufBarrier.buffer = scratch_scan_range.buffer;
+                  scanDstBufBarrier.offset = scratch_scan_range.offset;
+                  scanDstBufBarrier.size = scratch_scan_range.size;
+                }
+                scanner->dispatchHelper(cmdbuf, scan->getLayout(), *scan_push_constants, *scan_dispatch_info,
+                                        static_cast<asset::E_PIPELINE_STAGE_FLAGS>(asset::EPSF_COMPUTE_SHADER_BIT | asset::EPSF_TRANSFER_BIT), 0u,
+                                        nullptr,
+                                        static_cast<asset::E_PIPELINE_STAGE_FLAGS>(asset::EPSF_COMPUTE_SHADER_BIT | asset::EPSF_TRANSFER_BIT), 0u,
+                                        nullptr
+                );
 
-#define _NBL_GLSL_WORKGROUP_SIZE_ %u
-#define _NBL_GLSL_EXT_RADIXSORT_BUCKET_COUNT_ %u
+                cmdbuf->bindComputePipeline(scatter);
+                cmdbuf->bindDescriptorSets(asset::EPBP_COMPUTE, scatter->getLayout(), 0u, 2u, descriptor_sets);
 
-layout (local_size_x = _NBL_GLSL_WORKGROUP_SIZE_) in;
- 
-#include "%s"
+                auto scatterDstMask = pass == (PASS_COUNT - 1)
+                                      ? end_mask
+                                      : static_cast<asset::E_PIPELINE_STAGE_FLAGS>(asset::EPSF_COMPUTE_SHADER_BIT | asset::EPSF_TRANSFER_BIT);
+                dispatchHelper(cmdbuf, scatter->getLayout(), sort_push_constants[pass], *sort_dispatch_info,
+                               static_cast<asset::E_PIPELINE_STAGE_FLAGS>(asset::EPSF_COMPUTE_SHADER_BIT | asset::EPSF_TRANSFER_BIT), 0u, nullptr,
+                               scatterDstMask, 0u, nullptr
+                );
+              }
+            }
 
-)===";
+            core::smart_refctd_ptr <asset::ICPUShader>
+            RadixSort::createShader(const char *shader_path, video::ILogicalDevice *device) {
+              char *shader_file_path = shader_path;
+              auto system = device->getPhysicalDevice()->getSystem();
+              core::smart_refctd_ptr<const system::IFile> glsl = system->loadBuiltinData<NBL_CORE_UNIQUE_STRING_LITERAL_TYPE(shader_file_path)>();
+              auto buffer = core::make_smart_refctd_ptr<asset::ICPUBuffer>(glsl->getSize());
+              memcpy(buffer->getPointer(), glsl->getMappedPointer(), glsl->getSize());
+              auto cpushader = core::make_smart_refctd_ptr<asset::ICPUShader>(std::move(buffer), asset::IShader::buffer_contains_glsl_t{},
+                                                                              asset::IShader::ESS_COMPUTE, "????");
 
-	// Todo: This just the value I took from FFT example, don't know how it is being computed.
-	const size_t extraSize = 4u + 8u + 8u + 128u;
+              return asset::IGLSLCompiler::createOverridenCopy(
+                  cpushader.get(),
+                  "#define _NBL_GLSL_WORKGROUP_SIZE_ %d\n#define _NBL_GLSL_EXT_RADIXSORT_BUCKET_COUNT_ %d\n",
+                  m_wg_size, BUCKETS_COUNT
+              );
+            }
 
-	auto shader = core::make_smart_refctd_ptr<asset::ICPUBuffer>(strlen(source_fmt) + extraSize + 1u);
-	snprintf(reinterpret_cast<char*>(shader->getPointer()), shader->getSize(), source_fmt, m_wg_size, BUCKETS_COUNT, shader_file_path);
-
-	auto cpu_specialized_shader = core::make_smart_refctd_ptr<asset::ICPUSpecializedShader>(
-		core::make_smart_refctd_ptr<asset::ICPUShader>(std::move(shader), asset::ICPUShader::buffer_contains_glsl),
-		asset::ISpecializedShader::SInfo{ nullptr, nullptr, "main", asset::ISpecializedShader::ESS_COMPUTE });
-
-	auto gpu_shader = driver->createShader(core::smart_refctd_ptr<const asset::ICPUShader>(cpu_specialized_shader->getUnspecialized()));
-	auto gpu_shader_specialized = driver->createSpecializedShader(gpu_shader.get(), cpu_specialized_shader->getSpecializationInfo());
-
-	return gpu_shader_specialized;
-}
-
-core::smart_refctd_ptr<video::IGPUSpecializedShader> RadixSort::createShader_Scan(const char* shader_file_path, video::IDriver* driver)
-{
-	const char* source_fmt =
-R"===(#version 430 core
-
-#define _NBL_GLSL_WORKGROUP_SIZE_ %u
-#define _NBL_GLSL_EXT_SCAN_BIN_OP_ (1 << 3)
-#define _NBL_GLSL_EXT_SCAN_STORAGE_TYPE_ uint
-
-layout (local_size_x = _NBL_GLSL_WORKGROUP_SIZE_) in;
- 
-#include "%s"
-
-)===";
-
-	// Todo: This just the value I took from FFT example, don't know how it is being computed.
-	const size_t extraSize = 4u + 8u + 8u + 128u;
-
-	auto shader = core::make_smart_refctd_ptr<asset::ICPUBuffer>(strlen(source_fmt) + extraSize + 1u);
-	snprintf(reinterpret_cast<char*>(shader->getPointer()), shader->getSize(), source_fmt, m_wg_size, shader_file_path);
-
-	auto cpu_specialized_shader = core::make_smart_refctd_ptr<asset::ICPUSpecializedShader>(
-		core::make_smart_refctd_ptr<asset::ICPUShader>(std::move(shader), asset::ICPUShader::buffer_contains_glsl),
-		asset::ISpecializedShader::SInfo{ nullptr, nullptr, "main", asset::ISpecializedShader::ESS_COMPUTE });
-
-	auto gpu_shader = driver->createShader(core::smart_refctd_ptr<const asset::ICPUShader>(cpu_specialized_shader->getUnspecialized()));
-	auto gpu_shader_specialized = driver->createSpecializedShader(gpu_shader.get(), cpu_specialized_shader->getSpecializationInfo());
-
-	return gpu_shader_specialized;
-}
-
-}
-}
+        }
+    }
 }

@@ -29,3 +29,4 @@ source/Irrlicht/libIrrlichtServer.a
 examples_tests/*
 examples_tests/tmp/*
 android-sample/bin/*
+cmake-build-debug/*
