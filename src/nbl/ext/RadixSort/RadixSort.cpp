@@ -30,13 +30,11 @@ namespace nbl {
 
               m_histogram_pipeline = device->createComputePipeline(nullptr, core::smart_refctd_ptr(m_pipeline_layout),
                                                                    core::smart_refctd_ptr<video::IGPUSpecializedShader>(getDefaultSpecializedShader(
-                                                                       "nbl/builtin/glsl/ext/RadixSort/default_histogram.comp", device,
-                                                                       E_SHADER_TYPE::ESHT_HISTOGRAM)));
+                                                                       device, E_SHADER_TYPE::ESHT_HISTOGRAM)));
 
               m_scatter_pipeline = device->createComputePipeline(nullptr, core::smart_refctd_ptr(m_pipeline_layout),
                                                                  core::smart_refctd_ptr<video::IGPUSpecializedShader>(getDefaultSpecializedShader(
-                                                                     "nbl/builtin/glsl/ext/RadixSort/default_scatter.comp", device,
-                                                                     E_SHADER_TYPE::ESHT_SCATTER)));
+                                                                     device, E_SHADER_TYPE::ESHT_SCATTER)));
             }
 
             void RadixSort::sort(video::ILogicalDevice *device, video::IGPUCommandBuffer *cmdbuf, video::CScanner *scanner,
@@ -49,8 +47,8 @@ namespace nbl {
                                  DispatchInfo_t *sort_dispatch_info,
                                  video::CScanner::DefaultPushConstants *scan_push_constants,
                                  video::CScanner::DispatchInfo *scan_dispatch_info,
-                                 asset::SBufferRange<video::IGPUBuffer> &scratch_sort_range, // TODO (Penta): Remove if we don't need for barriers
-                                 asset::SBufferRange<video::IGPUBuffer> &scratch_scan_range, // TODO (Penta): Remove if we don't need for barriers
+                                 asset::SBufferRange <video::IGPUBuffer> &scratch_sort_range, // TODO (Penta): Remove if we don't need for barriers
+                                 asset::SBufferRange <video::IGPUBuffer> &scratch_scan_range, // TODO (Penta): Remove if we don't need for barriers
                                  asset::E_PIPELINE_STAGE_FLAGS start_mask, asset::E_PIPELINE_STAGE_FLAGS end_mask) {
               // (Penta): This function must record all passes to the command buffer and the buffer itself must be submitted only once.
               // Due to the multi-pass nature of the algorithm, it is expected to take the results of the each pass into the next one
@@ -118,21 +116,28 @@ namespace nbl {
               }
             }
 
-            core::smart_refctd_ptr <asset::ICPUShader>
-            RadixSort::createShader(const char *shader_path, video::ILogicalDevice *device) {
-              char *shader_file_path = shader_path;
+            core::smart_refctd_ptr<asset::ICPUShader>
+            RadixSort::createShader(video::ILogicalDevice *device, E_SHADER_TYPE type) {
               auto system = device->getPhysicalDevice()->getSystem();
-              core::smart_refctd_ptr<const system::IFile> glsl = system->loadBuiltinData<NBL_CORE_UNIQUE_STRING_LITERAL_TYPE(shader_file_path)>();
+              core::smart_refctd_ptr<const system::IFile> glsl = type == E_SHADER_TYPE::ESHT_HISTOGRAM
+                                                                 ? system->loadBuiltinData<NBL_CORE_UNIQUE_STRING_LITERAL_TYPE(
+                      "nbl/builtin/glsl/ext/RadixSort/default_histogram.comp") >()
+                                                                 : system->loadBuiltinData<NBL_CORE_UNIQUE_STRING_LITERAL_TYPE(
+                      "nbl/builtin/glsl/ext/RadixSort/default_scatter.comp") >();
               auto buffer = core::make_smart_refctd_ptr<asset::ICPUBuffer>(glsl->getSize());
               memcpy(buffer->getPointer(), glsl->getMappedPointer(), glsl->getSize());
               auto cpushader = core::make_smart_refctd_ptr<asset::ICPUShader>(std::move(buffer), asset::IShader::buffer_contains_glsl_t{},
                                                                               asset::IShader::ESS_COMPUTE, "????");
 
-              return asset::IGLSLCompiler::createOverridenCopy(
+              core::smart_refctd_ptr<asset::ICPUShader> shader = asset::IGLSLCompiler::createOverridenCopy(
                   cpushader.get(),
                   "#define _NBL_GLSL_WORKGROUP_SIZE_ %d\n#define _NBL_GLSL_EXT_RADIXSORT_BUCKET_COUNT_ %d\n",
                   m_wg_size, BUCKETS_COUNT
               );
+              shader->setFilePathHint(type == E_SHADER_TYPE::ESHT_HISTOGRAM
+                                      ? "nbl/builtin/glsl/ext/RadixSort/default_histogram.comp"
+                                      : "nbl/builtin/glsl/ext/RadixSort/default_scatter.comp");
+              return shader;
             }
 
         }

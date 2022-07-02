@@ -138,33 +138,32 @@ public:
       device->updateDescriptorSets(count, writes, 0u, nullptr);
     }
 
-    inline asset::ICPUShader *getDefaultShader(const char *shader_file_path, video::ILogicalDevice *device, E_SHADER_TYPE type) {
+    inline asset::ICPUShader *getDefaultShader(video::ILogicalDevice *device, E_SHADER_TYPE type) {
       core::smart_refctd_ptr <asset::ICPUShader> shader;
       if (type == E_SHADER_TYPE::ESHT_HISTOGRAM && !m_histogram_shader) {
-        m_histogram_shader = createShader(shader_file_path, device);
+        m_histogram_shader = createShader(device, type);
         shader = m_histogram_shader;
       }
       else if (type == E_SHADER_TYPE::ESHT_SCATTER && !m_scatter_shader) {
-        m_scatter_shader = createShader(shader_file_path, device);
+        m_scatter_shader = createShader(device, type);
         shader = m_scatter_shader;
       }
 
-      shader.get()->setFilePathHint(shader_file_path);
       shader.get()->setShaderStage(asset::IShader::ESS_COMPUTE);
 
       return shader.get();
     }
 
     //
-    inline video::IGPUSpecializedShader *getDefaultSpecializedShader(const char *shader_file_path, video::ILogicalDevice *device, E_SHADER_TYPE type) {
+    inline video::IGPUSpecializedShader *getDefaultSpecializedShader(video::ILogicalDevice *device, E_SHADER_TYPE type) {
       core::smart_refctd_ptr <video::IGPUSpecializedShader> shader;
       if (type == E_SHADER_TYPE::ESHT_HISTOGRAM && !m_specialized_hist_shader) {
-        auto cpuShader = core::smart_refctd_ptr<asset::ICPUShader>(getDefaultShader(shader_file_path, device, type));
+        auto cpuShader = core::smart_refctd_ptr<asset::ICPUShader>(getDefaultShader(device, type));
         auto gpushader = device->createShader(std::move(cpuShader));
         shader = device->createSpecializedShader(gpushader.get(), {nullptr, nullptr, "main"});
       }
       else if (type == E_SHADER_TYPE::ESHT_SCATTER && !m_specialized_scatter_shader) {
-        auto cpuShader = core::smart_refctd_ptr<asset::ICPUShader>(getDefaultShader(shader_file_path, device, type));
+        auto cpuShader = core::smart_refctd_ptr<asset::ICPUShader>(getDefaultShader(device, type));
         auto gpushader = device->createShader(std::move(cpuShader));
         shader = device->createSpecializedShader(gpushader.get(), {nullptr, nullptr, "main"});
       }
@@ -189,7 +188,7 @@ private:
     core::smart_refctd_ptr <video::IGPUSpecializedShader> m_specialized_scatter_shader;
 
     core::smart_refctd_ptr <asset::ICPUShader>
-    createShader(const char *shader_file_path, video::ILogicalDevice *device);
+    createShader(video::ILogicalDevice *device, E_SHADER_TYPE type);
 };
 
 }

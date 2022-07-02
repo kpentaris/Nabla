@@ -1,3 +1,5 @@
+#version 460 core
+
 #ifndef _NBL_GLSL_WORKGROUP_SIZE_
 #define _NBL_GLSL_WORKGROUP_SIZE_ 256
 layout(local_size_x = _NBL_GLSL_WORKGROUP_SIZE_) in;
@@ -39,8 +41,8 @@ layout (set = _NBL_GLSL_EXT_RADIXSORT_HISTOGRAM_INOUT_SET_DEFINED_, binding = _N
 #define _NBL_GLSL_EXT_RADIXSORT_HISTOGRAM_INOUT_DESCRIPTOR_DEFINED_
 #endif
 
-#include "nbl/builtin/glsl/ext/RadixSort/parameters_struct.glsl"
-#include "nbl/builtin/glsl/ext/RadixSort/parameters.glsl"
+#include <nbl/builtin/glsl/ext/RadixSort/parameters_struct.glsl>
+#include <nbl/builtin/glsl/ext/RadixSort/parameters.glsl>
 
 #ifndef _NBL_GLSL_EXT_RADIXSORT_BUCKET_COUNT_
 #error "You need to define `_NBL_GLSL_EXT_RADIXSORT_BUCKET_COUNT_`!"
@@ -72,7 +74,7 @@ nbl_glsl_ext_RadixSort_Parameters_t nbl_glsl_ext_RadixSort_getParameters()
 
 uvec2 nbl_glsl_ext_RadixSort_getPaddedData(in uint idx)
 {
-	uvec2 data = uvec2(UINT_MAX);
+	uvec2 data = uvec2(nbl_glsl_UINT_MAX);
 	if (idx < nbl_glsl_ext_RadixSort_Parameters_t_getElementCountTotal())
 		data = inout_values[idx];
 
@@ -161,7 +163,7 @@ uvec2 nbl_glsl_ext_RadixSort_scatter(in uvec2 data, in uint scatter_idx)
 	return uvec2(_NBL_GLSL_SCRATCH_SHARED_DEFINED_[gl_LocalInvocationIndex], _NBL_GLSL_SCRATCH_SHARED_DEFINED_[gl_LocalInvocationIndex + _NBL_GLSL_WORKGROUP_SIZE_]);
 }
 
-#include "nbl/builtin/glsl/ext/RadixSort/radix_sort.glsl"
+#include <nbl/builtin/glsl/ext/RadixSort/radix_sort.glsl>
 
 void nbl_glsl_ext_RadixSort_defaultHistogram()
 {
