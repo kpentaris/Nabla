@@ -28,13 +28,15 @@ namespace nbl {
               m_pipeline_layout = device->createPipelineLayout(&pc_range, &pc_range + 1,
                                                                core::smart_refctd_ptr(m_scan_ds_layout), core::smart_refctd_ptr(m_sort_ds_layout));
 
-              m_histogram_pipeline = device->createComputePipeline(nullptr, core::smart_refctd_ptr(m_pipeline_layout),
-                                                                   core::smart_refctd_ptr<video::IGPUSpecializedShader>(getDefaultSpecializedShader(
-                                                                       device, E_SHADER_TYPE::ESHT_HISTOGRAM)));
+              m_histogram_pipeline = device->createComputePipeline(
+                  nullptr, std::move(core::smart_refctd_ptr(m_pipeline_layout)),
+                  std::move(getDefaultSpecializedShader(device, E_SHADER_TYPE::ESHT_HISTOGRAM))
+              );
 
-              m_scatter_pipeline = device->createComputePipeline(nullptr, core::smart_refctd_ptr(m_pipeline_layout),
-                                                                 core::smart_refctd_ptr<video::IGPUSpecializedShader>(getDefaultSpecializedShader(
-                                                                     device, E_SHADER_TYPE::ESHT_SCATTER)));
+              m_scatter_pipeline = device->createComputePipeline(
+                  nullptr, std::move(core::smart_refctd_ptr(m_pipeline_layout)),
+                  std::move(getDefaultSpecializedShader(device, E_SHADER_TYPE::ESHT_SCATTER))
+              );
             }
 
             void RadixSort::sort(video::ILogicalDevice *device, video::IGPUCommandBuffer *cmdbuf, video::CScanner *scanner,
@@ -48,7 +50,8 @@ namespace nbl {
                                  video::CScanner::DefaultPushConstants *scan_push_constants,
                                  video::CScanner::DispatchInfo *scan_dispatch_info,
                                  asset::SBufferRange <video::IGPUBuffer> &scratch_sort_range, // TODO (Penta): Remove if we don't need for barriers
-                                 asset::SBufferRange <video::IGPUBuffer> &scratch_scan_range, // TODO (Penta): Remove if we don't need for barriers
+                                 asset::SBufferRange <video::IGPUBuffer> &histogram_range,
+                                 asset::SBufferRange <video::IGPUBuffer> &scratch_scan_range,
                                  asset::E_PIPELINE_STAGE_FLAGS start_mask, asset::E_PIPELINE_STAGE_FLAGS end_mask) {
               // (Penta): This function must record all passes to the command buffer and the buffer itself must be submitted only once.
               // Due to the multi-pass nature of the algorithm, it is expected to take the results of the each pass into the next one
@@ -57,8 +60,31 @@ namespace nbl {
               // to copy the scratch buffer results to the input for the next pass, which would require a fence and multiple submissions,
               // one for each pass.
 
-              for (uint32_t pass = 0; pass < PASS_COUNT; ++pass) {
-                cmdbuf->fillBuffer(scratch_scan_range.buffer.get(), 0u, sizeof(uint32_t) + scratch_scan_range.size / 2u, 0u);
+//              for (uint32_t pass = 0; pass < PASS_COUNT; ++pass) {
+                uint32_t pass = 0;
+//                cmdbuf->fillBuffer(histogram_range.buffer.get(), 0u, /*sizeof(uint32_t) + histogram_range.size / 2u*/histogram_range.size / 4u, 0u);
+//                cmdbuf->fillBuffer(scratch_scan_range.buffer.get(), 0u, /*sizeof(uint32_t) + scratch_scan_range.size / 2u*/scratch_scan_range.size/ 4u, 0u);
+
+                video::IGPUCommandBuffer::SBufferMemoryBarrier scanDstBufBarrier;
+                {
+                  scanDstBufBarrier.barrier.dstAccessMask = asset::EAF_SHADER_READ_BIT;
+                  scanDstBufBarrier.dstQueueFamilyIndex = scanDstBufBarrier.srcQueueFamilyIndex = cmdbuf->getQueueFamilyIndex();
+                  scanDstBufBarrier.buffer = scratch_scan_range.buffer;
+                  scanDstBufBarrier.offset = scratch_scan_range.offset;
+                  scanDstBufBarrier.size = scratch_scan_range.size;
+                }
+                video::IGPUCommandBuffer::SBufferMemoryBarrier histogramDstBufBarrier;
+                {
+                  histogramDstBufBarrier.barrier.dstAccessMask = asset::EAF_SHADER_READ_BIT;
+                  histogramDstBufBarrier.dstQueueFamilyIndex = histogramDstBufBarrier.srcQueueFamilyIndex = cmdbuf->getQueueFamilyIndex();
+                  histogramDstBufBarrier.buffer = histogram_range.buffer;
+                  histogramDstBufBarrier.offset = histogram_range.offset;
+                  histogramDstBufBarrier.size = histogram_range.size;
+                }
+
+                video::IGPUCommandBuffer::SBufferMemoryBarrier barriers[2] = {scanDstBufBarrier, histogramDstBufBarrier};
+                cmdbuf->pipelineBarrier(start_mask, static_cast<asset::E_PIPELINE_STAGE_FLAGS>(asset::EPSF_COMPUTE_SHADER_BIT |
+                asset::EPSF_TRANSFER_BIT), asset::EDF_NONE, 0u, nullptr,2u,barriers,0u,nullptr);
 
                 const video::IGPUDescriptorSet *descriptor_sets[2] = {ds_scan->get(), ds_sort[pass % 2].get()};
 
@@ -82,38 +108,30 @@ namespace nbl {
                                         : static_cast<asset::E_PIPELINE_STAGE_FLAGS>(asset::EPSF_COMPUTE_SHADER_BIT | asset::EPSF_TRANSFER_BIT);
                 dispatchHelper(cmdbuf, histogram->getLayout(), sort_push_constants[pass], *sort_dispatch_info,
                                histogramSrcMask, 0u, nullptr,
-                               static_cast<asset::E_PIPELINE_STAGE_FLAGS>(asset::EPSF_COMPUTE_SHADER_BIT | asset::EPSF_TRANSFER_BIT), 0u, nullptr
+//                               static_cast<asset::E_PIPELINE_STAGE_FLAGS>(asset::EPSF_COMPUTE_SHADER_BIT | asset::EPSF_TRANSFER_BIT), 0u, nullptr
+                               end_mask, 0u, nullptr
                 );
 
-                cmdbuf->bindComputePipeline(scan);
-                cmdbuf->bindDescriptorSets(asset::EPBP_COMPUTE, scan->getLayout(), 0u, 1u, &ds_scan->get());
-                video::IGPUCommandBuffer::SBufferMemoryBarrier scanDstBufBarrier;
-                {
-                  scanDstBufBarrier.barrier.srcAccessMask = asset::EAF_TRANSFER_WRITE_BIT;
-                  scanDstBufBarrier.barrier.dstAccessMask = asset::EAF_SHADER_READ_BIT;
-                  scanDstBufBarrier.dstQueueFamilyIndex = scanDstBufBarrier.srcQueueFamilyIndex = cmdbuf->getQueueFamilyIndex();
-                  scanDstBufBarrier.buffer = scratch_scan_range.buffer;
-                  scanDstBufBarrier.offset = scratch_scan_range.offset;
-                  scanDstBufBarrier.size = scratch_scan_range.size;
-                }
-                scanner->dispatchHelper(cmdbuf, scan->getLayout(), *scan_push_constants, *scan_dispatch_info,
-                                        static_cast<asset::E_PIPELINE_STAGE_FLAGS>(asset::EPSF_COMPUTE_SHADER_BIT | asset::EPSF_TRANSFER_BIT), 0u,
-                                        nullptr,
-                                        static_cast<asset::E_PIPELINE_STAGE_FLAGS>(asset::EPSF_COMPUTE_SHADER_BIT | asset::EPSF_TRANSFER_BIT), 0u,
-                                        nullptr
-                );
-
-                cmdbuf->bindComputePipeline(scatter);
-                cmdbuf->bindDescriptorSets(asset::EPBP_COMPUTE, scatter->getLayout(), 0u, 2u, descriptor_sets);
-
-                auto scatterDstMask = pass == (PASS_COUNT - 1)
-                                      ? end_mask
-                                      : static_cast<asset::E_PIPELINE_STAGE_FLAGS>(asset::EPSF_COMPUTE_SHADER_BIT | asset::EPSF_TRANSFER_BIT);
-                dispatchHelper(cmdbuf, scatter->getLayout(), sort_push_constants[pass], *sort_dispatch_info,
-                               static_cast<asset::E_PIPELINE_STAGE_FLAGS>(asset::EPSF_COMPUTE_SHADER_BIT | asset::EPSF_TRANSFER_BIT), 0u, nullptr,
-                               scatterDstMask, 0u, nullptr
-                );
-              }
+//                cmdbuf->bindComputePipeline(scan);
+//                cmdbuf->bindDescriptorSets(asset::EPBP_COMPUTE, scan->getLayout(), 0u, 1u, &ds_scan->get());
+//                scanner->dispatchHelper(cmdbuf, scan->getLayout(), *scan_push_constants, *scan_dispatch_info,
+//                                        static_cast<asset::E_PIPELINE_STAGE_FLAGS>(asset::EPSF_COMPUTE_SHADER_BIT | asset::EPSF_TRANSFER_BIT), 0u,
+//                                        nullptr,
+//                                        static_cast<asset::E_PIPELINE_STAGE_FLAGS>(asset::EPSF_COMPUTE_SHADER_BIT | asset::EPSF_TRANSFER_BIT), 0u,
+//                                        nullptr
+//                );
+//
+//                cmdbuf->bindComputePipeline(scatter);
+//                cmdbuf->bindDescriptorSets(asset::EPBP_COMPUTE, scatter->getLayout(), 0u, 2u, descriptor_sets);
+//
+//                auto scatterDstMask = pass == (PASS_COUNT - 1)
+//                                      ? end_mask
+//                                      : static_cast<asset::E_PIPELINE_STAGE_FLAGS>(asset::EPSF_COMPUTE_SHADER_BIT | asset::EPSF_TRANSFER_BIT);
+//                dispatchHelper(cmdbuf, scatter->getLayout(), sort_push_constants[pass], *sort_dispatch_info,
+//                               static_cast<asset::E_PIPELINE_STAGE_FLAGS>(asset::EPSF_COMPUTE_SHADER_BIT | asset::EPSF_TRANSFER_BIT), 0u, nullptr,
+//                               scatterDstMask, 0u, nullptr
+//                );
+//              }
             }
 
             core::smart_refctd_ptr<asset::ICPUShader>

@@ -48,6 +48,7 @@ public:
                      video::CScanner::DefaultPushConstants *scan_push_constants,
                      video::CScanner::DispatchInfo *scan_dispatch_info,
                      asset::SBufferRange <video::IGPUBuffer> &scratch_sort_range,
+                     asset::SBufferRange <video::IGPUBuffer> &histogram_range,
                      asset::SBufferRange <video::IGPUBuffer> &scratch_scan_range,
                      asset::E_PIPELINE_STAGE_FLAGS start_mask, asset::E_PIPELINE_STAGE_FLAGS end_mask);
 
@@ -155,19 +156,17 @@ public:
     }
 
     //
-    inline video::IGPUSpecializedShader *getDefaultSpecializedShader(video::ILogicalDevice *device, E_SHADER_TYPE type) {
-      core::smart_refctd_ptr <video::IGPUSpecializedShader> shader;
+    inline core::smart_refctd_ptr <video::IGPUSpecializedShader> getDefaultSpecializedShader(video::ILogicalDevice *device, E_SHADER_TYPE type) {
       if (type == E_SHADER_TYPE::ESHT_HISTOGRAM && !m_specialized_hist_shader) {
         auto cpuShader = core::smart_refctd_ptr<asset::ICPUShader>(getDefaultShader(device, type));
         auto gpushader = device->createShader(std::move(cpuShader));
-        shader = device->createSpecializedShader(gpushader.get(), {nullptr, nullptr, "main"});
+        return device->createSpecializedShader(gpushader.get(), {nullptr, nullptr, "main"});
       }
       else if (type == E_SHADER_TYPE::ESHT_SCATTER && !m_specialized_scatter_shader) {
         auto cpuShader = core::smart_refctd_ptr<asset::ICPUShader>(getDefaultShader(device, type));
         auto gpushader = device->createShader(std::move(cpuShader));
-        shader = device->createSpecializedShader(gpushader.get(), {nullptr, nullptr, "main"});
+        return device->createSpecializedShader(gpushader.get(), {nullptr, nullptr, "main"});
       }
-      return shader.get();
     }
 
 private:

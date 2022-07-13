@@ -153,12 +153,14 @@ namespace nbl::video
                 continue;
         }
 
-        const size_t totalFeatureCount = selectedFeatureSet.size() + 1ull;
+        const size_t totalFeatureCount = selectedFeatureSet.size() + 3ull;
         core::vector<const char*> selectedFeatures(totalFeatureCount);
         uint32_t k = 0u;
         for (const auto& feature : selectedFeatureSet)
             selectedFeatures[k++] = feature.c_str();
         selectedFeatures[k++] = VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
+        selectedFeatures[k++] = VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME;
+        selectedFeatures[k++] = VK_KHR_SHADER_NON_SEMANTIC_INFO_EXTENSION_NAME;
 
         std::unique_ptr<CVulkanDebugCallback> debugCallback = nullptr;
         VkDebugUtilsMessengerCreateInfoEXT debugMessengerCreateInfo = { VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT };

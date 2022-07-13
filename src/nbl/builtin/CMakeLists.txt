@@ -210,6 +210,11 @@ set(nbl_resources_to_embed
   # ext shouldn't be built into the engine, but there's no harm including some non-dynamic GLSL source to make life easier
   #"nbl/builtin/glsl/ext/.glsl"
   # radix sort
+  "nbl/builtin/glsl/ext/RadixSort/radix_sort.glsl"
+  "nbl/builtin/glsl/ext/RadixSort/default_histogram.comp"
+  "nbl/builtin/glsl/ext/RadixSort/default_scatter.comp"
+  "nbl/builtin/glsl/ext/RadixSort/parameters_struct.glsl"
+  "nbl/builtin/glsl/ext/RadixSort/parameters.glsl"
   "nbl/builtin/glsl/ext/FFT/default_compute_fft.comp"
   "nbl/builtin/glsl/ext/FFT/fft.glsl"
   "nbl/builtin/glsl/ext/FFT/parameters_struct.glsl"

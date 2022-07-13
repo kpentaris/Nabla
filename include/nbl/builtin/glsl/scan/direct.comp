@@ -1,4 +1,5 @@
 #version 460 core
+#extension GL_EXT_debug_printf : enable
 
 #ifndef _NBL_GLSL_WORKGROUP_SIZE_
 #define _NBL_GLSL_WORKGROUP_SIZE_ 256
@@ -39,6 +40,9 @@ nbl_glsl_scan_DefaultSchedulerParameters_t nbl_glsl_scan_getSchedulerParameters(
 #ifndef _NBL_GLSL_MAIN_DEFINED_
 void main()
 {
+	debugPrintfEXT("ENTERED DIRECT SHADER\n");
+	debugPrintfEXT("ENTERED DIRECT SHADER\n");
+	debugPrintfEXT("ENTERED DIRECT SHADER\n");
 	nbl_glsl_scan_main();
 }
 #define _NBL_GLSL_MAIN_DEFINED_
