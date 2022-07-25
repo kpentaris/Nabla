@@ -1,10 +1,9 @@
 #version 460 core
-#extension GL_EXT_debug_printf : enable
 
 #ifndef _NBL_GLSL_WORKGROUP_SIZE_
 #define _NBL_GLSL_WORKGROUP_SIZE_ 256
-layout(local_size_x = _NBL_GLSL_WORKGROUP_SIZE_) in;
 #endif
+layout(local_size_x = _NBL_GLSL_WORKGROUP_SIZE_) in;
 
 #ifndef _NBL_GLSL_EXT_RADIXSORT_HISTOGRAM_OUTPUT_SET_DEFINED_
 #define _NBL_GLSL_EXT_RADIXSORT_HISTOGRAM_OUTPUT_SET_DEFINED_ 0
@@ -188,9 +187,7 @@ void nbl_glsl_ext_RadixSort_defaultHistogram()
 
 void main()
 {
-	debugPrintfEXT("ENTERED HISTOGRAM SHADER\n");
 	nbl_glsl_ext_RadixSort_defaultHistogram();
-	debugPrintfEXT("EXITED HISTOGRAM SHADER\n");
 }
 
 #define _NBL_GLSL_EXT_RADIXSORT_HISTOGRAM_MAIN_DEFINED_
