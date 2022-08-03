@@ -47,6 +47,7 @@ public:
                      DispatchInfo_t *sort_dispatch_info,
                      video::CScanner::DefaultPushConstants *scan_push_constants,
                      video::CScanner::DispatchInfo *scan_dispatch_info,
+                     asset::SBufferRange <video::IGPUBuffer>& input_sort_range,
                      asset::SBufferRange <video::IGPUBuffer> &scratch_sort_range,
                      asset::SBufferRange <video::IGPUBuffer> &histogram_range,
                      asset::SBufferRange <video::IGPUBuffer> &scratch_scan_range,

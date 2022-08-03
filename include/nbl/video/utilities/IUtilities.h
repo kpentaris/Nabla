@@ -82,7 +82,8 @@ class NBL_API IUtilities : public core::IReferenceCounted
             m_propertyPoolHandler = core::make_smart_refctd_ptr<CPropertyPoolHandler>(core::smart_refctd_ptr(m_device));
             // smaller workgroups fill occupancy gaps better, especially on new Nvidia GPUs, but we don't want too small workgroups on mobile
             // TODO: investigate whether we need to clamp against 256u instead of 128u on mobile
-            const auto scan_workgroup_size = core::max(core::roundDownToPoT(limits.maxWorkgroupSize[0]) >> 1u, 128u);
+            auto scan_workgroup_size = core::max(core::roundDownToPoT(limits.maxWorkgroupSize[0]) >> 1u, 128u);
+            scan_workgroup_size = scan_workgroup_size > 64 ? 64 : scan_workgroup_size;
             m_scanner = core::make_smart_refctd_ptr<CScanner>(core::smart_refctd_ptr(m_device), scan_workgroup_size);
         }
 
